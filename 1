@@ -1,0 +1,74 @@
+import subprocess
+import socket
+import json
+import psycopg2
+from datetime import datetime
+import os
+
+def run_ais_catcher():
+    ais_catcher_dir = r"C:\Users\User\Downloads\AIS-catcher.x86 (edge win 32)"
+    ais_catcher_exe = "AIS-catcher.exe"
+    command = [
+        os.path.join(ais_catcher_dir, ais_catcher_exe),
+        "-N", "8100",
+        "-v", "10", "-X", "-u", "127.0.0.1", "10110", "-u", "127.0.0.1", "10111"
+    ]
+    subprocess.Popen(command, cwd=ais_catcher_dir)
+
+def connect_to_db():
+    conn = psycopg2.connect(
+        dbname="ship_ais",
+        user="andigit",
+        password="kmzway87aa",
+        host="localhost",
+        port="5432"
+    )
+    return conn, conn.cursor()
+
+def receive_and_store_data():
+    TCP_IP = '127.0.0.1'
+    TCP_PORT = 8100
+    BUFFER_SIZE = 1024
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((TCP_IP, TCP_PORT))
+
+    conn, cursor = connect_to_db()
+
+    try:
+        while True:
+            data = s.recv(BUFFER_SIZE)
+            if not data:
+                break
+            try:
+                ais_data = json.loads(data.decode('utf-8'))
+                mmsi = ais_data.get('mmsi')
+                timestamp = datetime.fromtimestamp(ais_data.get('timestamp'))
+                latitude = ais_data.get('latitude')
+                longitude = ais_data.get('longitude')
+                sog = ais_data.get('sog')
+                cog = ais_data.get('cog')
+                heading = ais_data.get('heading')
+                vessel_name = ais_data.get('vessel_name')
+                imo = ais_data.get('imo')
+                call_sign = ais_data.get('call_sign')
+                vessel_type = ais_data.get('vessel_type')
+
+                cursor.execute(
+                    """
+                    INSERT INTO ais_data (mmsi, timestamp, latitude, longitude, sog, cog, heading, vessel_name, imo, call_sign, vessel_type)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (mmsi, timestamp, latitude, longitude, sog, cog, heading, vessel_name, imo, call_sign, vessel_type)
+                )
+                conn.commit()
+            except Exception as e:
+                print(f"Error: {e}")
+    finally:
+        s.close()
+        cursor.close()
+        conn.close()
+
+if __name__ == "__main__":
+    run_ais_catcher()
+    receive_and_store_data()
