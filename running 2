@@ -1,0 +1,103 @@
+import subprocess
+import socket
+import json
+import psycopg2
+from datetime import datetime
+import os
+
+# Fungsi untuk menjalankan AIS-catcher
+def run_ais_catcher():
+    # Direktori tempat AIS-catcher.exe berada
+    ais_catcher_dir = r"C:\Users\User\Downloads\AIS-catcher.x86 (edge win 32)"
+    
+    # Pastikan direktori ini ada dan tidak mengandung kesalahan penulisan
+    if not os.path.isdir(ais_catcher_dir):
+        raise FileNotFoundError(f"Direktori {ais_catcher_dir} tidak ditemukan. Periksa kembali pathnya.")
+    
+    # Nama file executable AIS-catcher
+    ais_catcher_exe = "AIS-catcher.exe"
+    
+    # Path lengkap ke executable AIS-catcher
+    ais_catcher_path = os.path.join(ais_catcher_dir, ais_catcher_exe)
+    
+    if not os.path.isfile(ais_catcher_path):
+        raise FileNotFoundError(f"File executable {ais_catcher_exe} tidak ditemukan di direktori {ais_catcher_dir}.")
+    
+    # Perintah untuk menjalankan AIS Catcher
+    command = [
+        ais_catcher_path,
+        "-D", "postgresql://postgres:kmzway87aa@localhost:5432/ship_ais",
+        "-N", "8100",
+        "-v", "10", "-X", "-u", "127.0.0.1", "10110", "-u", "127.0.0.1", "10111"
+    ]
+    
+    # Menjalankan perintah di dalam direktori AIS-catcher
+    subprocess.Popen(command, cwd=ais_catcher_dir)
+
+# Fungsi untuk menghubungkan ke PostgreSQL
+def connect_to_db():
+    conn = psycopg2.connect(
+        dbname="ship_ais",
+        user="postgres",
+        password="kmzway87aa",
+        host="localhost",
+        port="5432"
+    )
+    return conn, conn.cursor()
+
+# Fungsi untuk menerima data dari AIS Catcher dan menyimpannya ke PostgreSQL
+def receive_and_store_data():
+    # Konfigurasi alamat dan port untuk AIS Catcher
+    TCP_IP = '127.0.0.1'
+    TCP_PORT = 8100  # Pastikan port ini sesuai dengan yang digunakan oleh AIS-Catcher
+    BUFFER_SIZE = 4096  # Ukuran buffer yang lebih besar
+
+    # Membuat socket dan mendengarkan data
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((TCP_IP, TCP_PORT))
+
+    # Koneksi ke database
+    conn, cursor = connect_to_db()
+
+    try:
+        while True:
+            data = s.recv(BUFFER_SIZE)
+            if not data:
+                break
+            try:
+                # Parsing data NMEA ke JSON jika data dalam format JSON
+                ais_data = json.loads(data.decode('utf-8'))
+
+                # Menyimpan data ke PostgreSQL
+                cursor.execute(
+                    """
+                    INSERT INTO ais_data (mmsi, timestamp, latitude, longitude, sog, cog, heading, vessel_name, imo, call_sign, vessel_type)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        ais_data.get('mmsi'),
+                        datetime.fromtimestamp(ais_data.get('timestamp')) if ais_data.get('timestamp') else None,
+                        ais_data.get('latitude'),
+                        ais_data.get('longitude'),
+                        ais_data.get('sog'),
+                        ais_data.get('cog'),
+                        ais_data.get('heading'),
+                        ais_data.get('vessel_name'),
+                        ais_data.get('imo'),
+                        ais_data.get('call_sign'),
+                        ais_data.get('vessel_type')
+                    )
+                )
+                conn.commit()
+            except Exception as e:
+                print(f"Error processing data: {e}")
+    finally:
+        s.close()
+        cursor.close()
+        conn.close()
+
+if __name__ == "__main__":
+    # Menjalankan AIS Catcher
+    run_ais_catcher()
+    # Menerima dan menyimpan data
+    receive_and_store_data()
